@@ -1,0 +1,4 @@
+project:
+    name: weather-airflow
+postgres:
+    port: 5435
