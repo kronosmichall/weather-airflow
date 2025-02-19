@@ -14,13 +14,15 @@ def request_weather(api_key, city_name):
     
     return asyncio.to_thread(requests.get, url + endpoint, params=params)
 
-def request_weather_list(api_key, city_names):
-    return asyncio.gather(*[request_weather(api_key, city_name) for city_name in city_names])
+async def request_weather_list(api_key, city_names):
+    responses = await asyncio.gather(*[request_weather(api_key, city_name) for city_name in city_names])
+    return [response.json() for response in responses]
 
 def get_countries():
-    with open("capitals.json", "r") as f:
-       return json.load(f).values()
+    file_path = os.path.join(os.path.dirname(__file__), "capitals.json")
+    with open(file_path, "r") as f:
+        return json.load(f).values()
 
-async def extract(api_key):
+def extract(api_key):
     countries = get_countries()
-    result = await request_weather_list(api_key, countries)
+    return asyncio.run(request_weather_list(api_key, countries))
