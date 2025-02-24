@@ -5,14 +5,12 @@ from tempfile import NamedTemporaryFile
 import asyncio
 import os
 
-from airflow.providers.google.cloud.operators.gcs import GCSCreateBucketOperator
 from airflow.providers.google.cloud.transfers.local_to_gcs import LocalFilesystemToGCSOperator
-from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator, BigQueryCreateEmptyTableOperator
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
-from airflow.providers.google.cloud.hooks.kubernetes_engine import GKEAsyncHook
 from weather.extract import extract as extract_weather
 from weather.json_to_sql import parse_file_simple, parse_file_all
-
+from cosmos import DbtTaskGroup, ProjectConfig, ProfileConfig, ExecutionConfig
+from cosmos.profiles import GoogleCloudServiceAccountDictProfileMapping
 
 project_id = "spring-hope-450810-k2"
 bucket_name = "kronosmichall-raw_weather_data"
@@ -22,6 +20,28 @@ bq_dataset = "weather_dataset"
 bq_table_basic = "basic_weather_info"
 bq_table_all = "all_weather_info"
 
+# dbt config
+with open("/usr/local/airflow/service_account.json") as service_account:
+    keyfile_json = service_account.read()
+    
+    profile = GoogleCloudServiceAccountDictProfileMapping(
+        conn_id = 'gcp',
+        profile_args = {
+            "project": project_id,
+            "dataset": bq_dataset,
+            "keyfile_json": keyfile_json
+        },
+    )
+
+profile_config = ProfileConfig(
+    profile_name="weather",
+    target_name="dev",
+    profile_mapping=profile,
+)
+
+execution_config = ExecutionConfig(
+    dbt_executable_path="/usr/local/airflow/dbt_venv/bin/dbt",
+)
 
 def current_date():
     return datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -58,7 +78,7 @@ def weather_dag():
     def insert_into_bq_simple():
         data_simple = parse_file_simple(file_path)
         hook = BigQueryHook(gcp_conn_id="gcp", use_legacy_sql=False)
-        
+            
         hook.insert_all(
             project_id=project_id,
             dataset_id=bq_dataset,
@@ -81,14 +101,23 @@ def weather_dag():
     insert_into_bq_all_task = insert_into_bq_all()
         
         
+    transform_data = DbtTaskGroup(
+        group_id="transform_data",
+        project_config=ProjectConfig("/usr/local/airflow/include/weather"),
+        profile_config=profile_config,
+        execution_config=execution_config,
+        default_args={"retries": 2},
+    )
+
     @task(task_id="cleanup_data")
     def cleanup_data(file_path):
         os.remove(file_path)
         return f"Removed {file_path}"
     cleanup_data_task = cleanup_data(file_path)
-
+    
     
     extract_weather_task >> [send_file_task, insert_into_bq_simple_task, insert_into_bq_all_task]
+    [send_file_task, insert_into_bq_simple_task, insert_into_bq_all_task] >> transform_data
     [send_file_task, insert_into_bq_simple_task, insert_into_bq_all_task] >> cleanup_data_task
         
 weather_dag()

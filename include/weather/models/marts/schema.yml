@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: weather_dataset
+    schema: weather_dataset
+    database: weather_dataset
+    tables:
+      - name: all_weather_info
+      - name: basic_weather_info
